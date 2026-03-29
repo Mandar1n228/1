@@ -19,7 +19,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from flask import Flask, jsonify, redirect, render_template_string, request, session, url_for
+from flask import Flask, abort, jsonify, redirect, render_template_string, request, send_from_directory, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 
@@ -63,7 +63,7 @@ USER_ICON_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".svg")
 DATA_DIR = Path(__file__).resolve().parent / "data"
 DB_PATH = DATA_DIR / "gateway.db"
 DEFAULT_PASSWORD = "D@$UofZT"
-CAROUSEL_DIR = Path(__file__).resolve().parent / "static" / "carousel"
+CAROUSEL_DIR = Path(os.environ.get("GATEWAY_CAROUSEL_DIR", str(Path.home() / "GatewayCarouselPhotos"))).expanduser().resolve()
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("GATEWAY_SECRET_KEY", "change-this-secret")
@@ -2305,7 +2305,7 @@ def carousel_images_api():
             return jsonify({"items": []})
         with _db_conn() as conn:
             rows = conn.execute("SELECT id, file_name FROM carousel_images ORDER BY created_at DESC").fetchall()
-        items = [{"id": row["id"], "url": url_for("static", filename=f"carousel/{row['file_name']}")} for row in rows]
+        items = [{"id": row["id"], "url": url_for("carousel_image_file_api", file_name=row["file_name"])} for row in rows]
         return jsonify({"items": items})
 
     if user["username"] != "Богдан":
@@ -2350,6 +2350,16 @@ def carousel_image_delete_api(image_id: int):
         path.unlink()
     return jsonify({"ok": True})
 
+@app.route("/api/carousel/file/<path:file_name>", methods=["GET"])
+@_require_login
+def carousel_image_file_api(file_name: str):
+    user = _current_user()
+    if user is None or user["username"] != "Богдан":
+        return jsonify({"error": "forbidden"}), 403
+    safe_name = Path(file_name).name
+    if safe_name != file_name:
+        abort(400)
+    return send_from_directory(CAROUSEL_DIR, safe_name)
 
 @app.route("/api/alerts/zhytomyr-cause", methods=["GET"])
 @_require_login
