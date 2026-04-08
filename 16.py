@@ -713,50 +713,6 @@ PAGE_TEMPLATE = """
       font-weight: 700;
     }
 
-    .history-tabs {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 10px;
-    }
-
-    .history-tab {
-      border: 1px solid var(--panel-border);
-      border-radius: 8px;
-      background: #1e293b;
-      color: #fff;
-      padding: 6px 10px;
-      cursor: pointer;
-      font-size: 0.84rem;
-    }
-
-    .history-tab.active {
-      background: linear-gradient(180deg, var(--accent), var(--accent-dark));
-    }
-
-    .history-grid {
-      display: grid;
-      gap: 10px;
-      max-height: 62vh;
-      overflow: auto;
-    }
-
-    .history-card {
-      border: 1px solid var(--panel-border);
-      border-radius: 10px;
-      background: #020617;
-      padding: 10px;
-    }
-
-    .history-title {
-      font-weight: 700;
-      margin-bottom: 6px;
-    }
-
-    .history-stats {
-      font-size: 0.78rem;
-      color: #cbd5e1;
-      margin-bottom: 6px;
-    }
 
     .carousel-thumb-grid {
       display: grid;
@@ -886,7 +842,6 @@ PAGE_TEMPLATE = """
       <div class="panel-header">
         <div class="section-title">Ping у реальному часі</div>
         <div class="header-actions">
-          <button id="openHistoryModal" class="settings-btn" type="button" aria-label="Історія ping">ⓘ</button>
           <button id="openSoundSettings" class="settings-btn" type="button" aria-label="Налаштування звуку">⚙️</button>
           <button id="openPingModal" class="add-btn" type="button" aria-label="Додати ping">+</button>
         </div>
@@ -985,21 +940,6 @@ PAGE_TEMPLATE = """
     </div>
   </div>
 
-  <div class="modal-backdrop" id="historyModalBackdrop" role="dialog" aria-modal="true" aria-labelledby="historyModalTitle">
-    <div class="modal" style="width:min(1100px,98vw);max-height:90vh;overflow:auto;">
-      <h3 id="historyModalTitle">Історія Ping</h3>
-      <div class="history-tabs">
-        <button id="history1hBtn" type="button" class="history-tab">Остання година</button>
-        <button id="history24hBtn" type="button" class="history-tab active">Останні 24 години</button>
-        <button id="history7dBtn" type="button" class="history-tab">Останній тиждень</button>
-      </div>
-    <div id="historyChartsGrid" class="history-grid"></div>
-      <div class="modal-actions">
-        <button id="clearHistoryStorageBtn" type="button" class="modal-btn">Очистити історію ping</button>
-        <button id="closeHistoryModal" type="button" class="modal-btn">Закрити</button>
-      </div>
-    </div>
-  </div>
 
   <div id="pingAlertToast" class="notice-toast" role="status" aria-live="polite"></div>
 
@@ -1212,21 +1152,18 @@ PAGE_TEMPLATE = """
           if (!sample || !sample.ok) {
             pingState[target.host].meta.innerHTML = `${target.host} • <span class="down">offline</span>`;
             pushValue(target.host, null);
-            appendPingHistory(target.host, null);
             handlePingStatusChange(target, false);
             return;
           }
 
           pingState[target.host].meta.textContent = `${target.host} • ${sample.ms.toFixed(1)} ms`;
           pushValue(target.host, sample.ms);
-          appendPingHistory(target.host, sample.ms);
           handlePingStatusChange(target, true);
         });
       } catch (_err) {
         pingTargets.forEach((target) => {
           pingState[target.host].meta.innerHTML = `${target.host} • <span class="down">дані недоступні</span>`;
           pushValue(target.host, null);
-          appendPingHistory(target.host, null);
           handlePingStatusChange(target, false);
         });
       }
@@ -1659,163 +1596,6 @@ PAGE_TEMPLATE = """
 
     calendarModal.addEventListener("click", (event) => {
       if (event.target === calendarModal) closeCalendarModal();
-    });
-
-    // Ping history modal
-    const historyStorageKey = "gateway_ping_history_v1";
-    const openHistoryModalBtn = document.getElementById("openHistoryModal");
-    const historyModal = document.getElementById("historyModalBackdrop");
-    const closeHistoryModalBtn = document.getElementById("closeHistoryModal");
-    const clearHistoryStorageBtn = document.getElementById("clearHistoryStorageBtn");
-    const history1hBtn = document.getElementById("history1hBtn");
-    const history24hBtn = document.getElementById("history24hBtn");
-    const history7dBtn = document.getElementById("history7dBtn");
-    let historyMode = "24h";
-
-    function loadPingHistory() {
-      try {
-        const raw = localStorage.getItem(historyStorageKey);
-        const parsed = JSON.parse(raw || "{}");
-        return parsed && typeof parsed === "object" ? parsed : {};
-      } catch (_err) {
-        return {};
-      }
-    }
-
-    function savePingHistory(data) {
-      localStorage.setItem(historyStorageKey, JSON.stringify(data));
-    }
-
-    function appendPingHistory(host, ms) {
-      const now = Date.now();
-      const all = loadPingHistory();
-      if (!Array.isArray(all[host])) all[host] = [];
-      all[host].push([now, ms === null ? null : Number(ms)]);
-      const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
-      all[host] = all[host].filter((point) => Array.isArray(point) && Number(point[0]) >= weekAgo);
-      savePingHistory(all);
-    }
-
-    function getHistoryFor(host, mode) {
-      const all = loadPingHistory();
-      const source = Array.isArray(all[host]) ? all[host] : [];
-      const now = Date.now();
-      const windowMs = mode === "7d"
-        ? 7 * 24 * 60 * 60 * 1000
-        : mode === "1h"
-          ? 60 * 60 * 1000
-          : 24 * 60 * 60 * 1000;
-      const filtered = source.filter((point) => point[0] >= now - windowMs);
-      const maxPoints = 320;
-      if (filtered.length <= maxPoints) return filtered;
-      const step = Math.ceil(filtered.length / maxPoints);
-      return filtered.filter((_, idx) => idx % step === 0);
-    }
-
-    function buildHistoryStats(points) {
-      if (!points.length) return "Даних ще немає.";
-      let dropEvents = 0;
-      let prevUp = null;
-      let onlineCount = 0;
-      let pingCount = 0;
-      let pingSum = 0;
-
-      points.forEach((point) => {
-        const isUp = point[1] !== null;
-        if (isUp) {
-          onlineCount += 1;
-          pingCount += 1;
-          pingSum += point[1];
-        }
-        if (prevUp === true && !isUp) dropEvents += 1;
-        prevUp = isUp;
-      });
-
-      const availability = ((onlineCount / points.length) * 100).toFixed(1);
-      const avgPing = pingCount ? (pingSum / pingCount).toFixed(1) : "n/a";
-      return `Втрат зв'язку: ${dropEvents} • Доступність: ${availability}% • Середній ping: ${avgPing} ms`;
-    }
-
-    function drawHistoryChart(canvas, points) {
-      const ctx = canvas.getContext("2d");
-      const w = canvas.width;
-      const h = canvas.height;
-      ctx.clearRect(0, 0, w, h);
-
-      ctx.strokeStyle = "#1e293b";
-      ctx.lineWidth = 1;
-      for (let y = 1; y <= 3; y++) {
-        const yy = (h / 4) * y;
-        ctx.beginPath();
-        ctx.moveTo(0, yy);
-        ctx.lineTo(w, yy);
-        ctx.stroke();
-      }
-
-      if (!points.length) return;
-      const values = points.map((p) => p[1]).filter((v) => v !== null);
-      const maxVal = Math.max(10, ...(values.length ? values : [10]));
-
-      ctx.beginPath();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = "#60a5fa";
-      points.forEach((point, idx) => {
-        const x = (w / Math.max(1, points.length - 1)) * idx;
-        const val = point[1];
-        const y = val === null ? h - 2 : h - (Math.min(val, maxVal) / maxVal) * (h - 4) - 2;
-        if (idx === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      });
-      ctx.stroke();
-    }
-
-    function renderHistoryCharts() {
-      historyChartsGrid.innerHTML = "";
-      pingTargets.forEach((target) => {
-        const card = document.createElement("div");
-        card.className = "history-card";
-        const title = document.createElement("div");
-        title.className = "history-title";
-        title.textContent = `${target.name} (${target.host})`;
-        const stats = document.createElement("div");
-        stats.className = "history-stats";
-        const canvas = document.createElement("canvas");
-        canvas.width = 820;
-        canvas.height = 170;
-        const points = getHistoryFor(target.host, historyMode);
-        stats.textContent = buildHistoryStats(points);
-        drawHistoryChart(canvas, points);
-        card.appendChild(title);
-        card.appendChild(stats);
-        card.appendChild(canvas);
-        historyChartsGrid.appendChild(card);
-      });
-    }
-
-    function switchHistoryMode(mode) {
-      historyMode = mode;
-      history1hBtn.classList.toggle("active", mode === "1h");
-      history24hBtn.classList.toggle("active", mode === "24h");
-      history7dBtn.classList.toggle("active", mode === "7d");
-      renderHistoryCharts();
-    }
-
-    openHistoryModalBtn.addEventListener("click", () => {
-      historyModal.classList.add("open");
-      switchHistoryMode("24h");
-    });
-    closeHistoryModalBtn.addEventListener("click", () => historyModal.classList.remove("open"));
-    historyModal.addEventListener("click", (event) => {
-      if (event.target === historyModal) historyModal.classList.remove("open");
-    });
-history1hBtn.addEventListener("click", () => switchHistoryMode("1h"));
-    history24hBtn.addEventListener("click", () => switchHistoryMode("24h"));
-    history7dBtn.addEventListener("click", () => switchHistoryMode("7d"));
-    clearHistoryStorageBtn.addEventListener("click", () => {
-      const ok = window.confirm("Очистити локальну історію ping для всіх цілей?");
-      if (!ok) return;
-      localStorage.removeItem(historyStorageKey);
-      renderHistoryCharts();
     });
 
     function showCarouselSlide(index) {
