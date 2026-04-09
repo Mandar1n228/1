@@ -71,6 +71,7 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 DB_PATH = DATA_DIR / "gateway.db"
 DEFAULT_PASSWORD = "D@$UofZT"
 CAROUSEL_DIR = Path(os.environ.get("GATEWAY_CAROUSEL_DIR", str(Path.home() / "GatewayCarouselPhotos"))).expanduser().resolve()
+DATE_KEY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("GATEWAY_SECRET_KEY", "change-this-secret")
@@ -1389,7 +1390,7 @@ PAGE_TEMPLATE = """
     });
 
     // Calendar controls
-    const calendarStorageBaseKey = "gateway_controls_calendar_v1";
+    // const calendarStorageBaseKey = "gateway_controls_calendar_v1"
     const weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"];
     const monthNames = [
       "Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень",
@@ -1432,28 +1433,19 @@ PAGE_TEMPLATE = """
       return `${dateObj.getDate()} ${months[dateObj.getMonth()]} ${dateObj.getFullYear()}`;
     }
 
-    function getCalendarStorageKey() {
-      const username = authMe?.username ? authMe.username : "guest";
-      return `${calendarStorageBaseKey}_${username}`;
+    function normalizeControlEvents(items) {
+      if (!Array.isArray(items)) return [];
+      return items
+        .filter((e) => e && e.id !== undefined && typeof e.date === "string" && typeof e.title === "string")
+        .map((e) => ({ id: String(e.id), date: e.date, title: e.title.trim().slice(0, 120) }))
+        .filter((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.date) && e.title.length > 0);
     }
 
-    function loadControlEvents() {
-      try {
-        const raw = localStorage.getItem(getCalendarStorageKey());
-        if (!raw) return [];
-        const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed)) return [];
-        return parsed
-          .filter((e) => e && typeof e.id === "string" && typeof e.date === "string" && typeof e.title === "string")
-          .map((e) => ({ id: e.id, date: e.date, title: e.title.trim().slice(0, 120) }))
-          .filter((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.date) && e.title.length > 0);
-      } catch (_err) {
-        return [];
-      }
-    }
-
-    function persistControlEvents() {
-      localStorage.setItem(getCalendarStorageKey(), JSON.stringify(controlEvents));
+    async function fetchControlEvents() {
+      const r = await fetch("/api/calendar/controls", { cache: "no-store" });
+      if (!r.ok) throw new Error("calendar controls fetch failed");
+      const payload = await r.json();
+      controlEvents = normalizeControlEvents(payload.items);
     }
 
     function resetControlForm() {
@@ -1512,9 +1504,13 @@ PAGE_TEMPLATE = """
         deleteBtn.type = "button";
         deleteBtn.className = "delete";
         deleteBtn.textContent = "Видалити";
-        deleteBtn.addEventListener("click", () => {
-          controlEvents = controlEvents.filter((e) => e.id !== eventItem.id);
-          persistControlEvents();
+        deleteBtn.addEventListener("click", async () => {
+          const r = await fetch(`/api/calendar/controls/${encodeURIComponent(eventItem.id)}`, { method: "DELETE" });
+          if (!r.ok) {
+            alert("Не вдалося видалити контроль.");
+            return;
+          }
+          await fetchControlEvents();
           renderEventsForSelectedDate();
           renderCalendar();
           updateNearestControl();
@@ -1529,28 +1525,40 @@ PAGE_TEMPLATE = """
       });
     }
 
-    function saveControlEvent() {
-      const title = controlNameInput.value.trim();
-      if (!selectedDateKey) {
-        alert("Не обрано дату контролю. Відкрийте день у календарі та спробуйте ще раз.");
-        return;
-      }
+    async function saveControlEvent() {
+      const title = controlNameInput.value.trim();␊
+      if (!selectedDateKey) {␊
+        alert("Не обрано дату контролю. Відкрийте день у календарі та спробуйте ще раз.");␊
+        return;␊
+      }␊
       if (!title) {
         alert("Введіть назву контролю.");
         return;
       }
 
+      let r;
       if (editingEventId) {
-        controlEvents = controlEvents.map((e) => (e.id === editingEventId ? { ...e, title: title.slice(0, 120) } : e));
+        r = await fetch(`/api/calendar/controls/${encodeURIComponent(editingEventId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: title.slice(0, 120) }),
+        });
       } else {
-        controlEvents.push({
-          id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-          date: selectedDateKey,
-          title: title.slice(0, 120),
+        r = await fetch("/api/calendar/controls", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            date: selectedDateKey,
+            title: title.slice(0, 120),
+          }),
         });
       }
+      if (!r.ok) {
+        alert("Не вдалося зберегти контроль.");
+        return;
+      }
 
-      persistControlEvents();
+      await fetchControlEvents();
       renderEventsForSelectedDate();
       renderCalendar();
       updateNearestControl();
@@ -2007,8 +2015,12 @@ PAGE_TEMPLATE = """
       reader.readAsDataURL(file);
     });
 
-    fetchMe().then(() => {
-      controlEvents = loadControlEvents();
+    fetchMe().then(async () => {
+      try {
+        await fetchControlEvents();
+      } catch (_err) {
+        controlEvents = [];
+      }
       renderCalendar();
       updateNearestControl();
     });
@@ -2114,6 +2126,17 @@ def _init_auth_storage() -> None:
                 item_key TEXT NOT NULL,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 PRIMARY KEY (user_id, scope, item_key)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS control_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                date_key TEXT NOT NULL,
+                title TEXT NOT NULL,
+                created_at INTEGER NOT NULL
             )
             """
         )
@@ -2393,6 +2416,82 @@ def ui_visibility_api(user_id: int):
             )
         conn.commit()
 
+    return jsonify({"ok": True})
+
+
+def _serialize_control_event(row: sqlite3.Row) -> Dict[str, str]:
+    return {
+        "id": str(row["id"]),
+        "date": row["date_key"],
+        "title": row["title"],
+    }
+
+
+@app.route("/api/calendar/controls", methods=["GET", "POST"])
+@_require_login
+def calendar_controls_collection_api():
+    user = _current_user()
+    if user is None:
+        return jsonify({"error": "unauthorized"}), 401
+    user_id = int(user["id"])
+
+    if request.method == "GET":
+        with _db_conn() as conn:
+            rows = conn.execute(
+                "SELECT id, date_key, title FROM control_events WHERE user_id = ? ORDER BY date_key, id",
+                (user_id,),
+            ).fetchall()
+        return jsonify({"items": [_serialize_control_event(row) for row in rows]})
+
+    payload = request.get_json(silent=True) or {}
+    date_key = str(payload.get("date", "")).strip()
+    title = str(payload.get("title", "")).strip()[:120]
+    if not DATE_KEY_RE.match(date_key) or not title:
+        return jsonify({"error": "invalid payload"}), 400
+
+    with _db_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO control_events (user_id, date_key, title, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, date_key, title, int(time.time())),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT id, date_key, title FROM control_events WHERE id = ?",
+            (cur.lastrowid,),
+        ).fetchone()
+    return jsonify({"ok": True, "item": _serialize_control_event(row)})
+
+
+@app.route("/api/calendar/controls/<int:event_id>", methods=["PUT", "DELETE"])
+@_require_login
+def calendar_controls_item_api(event_id: int):
+    user = _current_user()
+    if user is None:
+        return jsonify({"error": "unauthorized"}), 401
+    user_id = int(user["id"])
+
+    with _db_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM control_events WHERE id = ? AND user_id = ?",
+            (event_id, user_id),
+        ).fetchone()
+        if row is None:
+            return jsonify({"error": "not found"}), 404
+
+        if request.method == "DELETE":
+            conn.execute("DELETE FROM control_events WHERE id = ? AND user_id = ?", (event_id, user_id))
+            conn.commit()
+            return jsonify({"ok": True})
+
+        payload = request.get_json(silent=True) or {}
+        title = str(payload.get("title", "")).strip()[:120]
+        if not title:
+            return jsonify({"error": "invalid payload"}), 400
+        conn.execute(
+            "UPDATE control_events SET title = ? WHERE id = ? AND user_id = ?",
+            (title, event_id, user_id),
+        )
+        conn.commit()
     return jsonify({"ok": True})
 
 
