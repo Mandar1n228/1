@@ -1462,8 +1462,11 @@ PAGE_TEMPLATE = """
     }
 
     function openCalendarModal(dateKey) {
-      selectedDateKey = dateKey;
-      calendarModalDateLabel.textContent = formatDateUA(parseDateKey(dateKey));
+      const normalizedDateKey = /^\d{4}-\d{2}-\d{2}$/.test(String(dateKey))
+        ? String(dateKey)
+        : formatDateKey(new Date());
+      selectedDateKey = normalizedDateKey;
+      calendarModalDateLabel.textContent = formatDateUA(parseDateKey(normalizedDateKey));
       renderEventsForSelectedDate();
       calendarModal.classList.add("open");
       controlNameInput.focus();
@@ -1528,7 +1531,10 @@ PAGE_TEMPLATE = """
 
     function saveControlEvent() {
       const title = controlNameInput.value.trim();
-      if (!selectedDateKey) return;
+      if (!selectedDateKey) {
+        alert("Не обрано дату контролю. Відкрийте день у календарі та спробуйте ще раз.");
+        return;
+      }
       if (!title) {
         alert("Введіть назву контролю.");
         return;
@@ -1624,6 +1630,12 @@ PAGE_TEMPLATE = """
     });
 
     saveControlBtn.addEventListener("click", saveControlEvent);
+    controlNameInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        saveControlEvent();
+      }
+    });
     cancelControlEditBtn.addEventListener("click", resetControlForm);
     closeCalendarModalBtn.addEventListener("click", closeCalendarModal);
 
